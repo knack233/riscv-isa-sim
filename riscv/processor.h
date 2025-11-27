@@ -91,6 +91,9 @@ struct state_t
   csr_t_p mstatush;
   csr_t_p mepc;
   csr_t_p mtval;
+#ifdef CPU_NANHU
+  csr_t_p mscratch;
+#endif
   csr_t_p mtvec;
   csr_t_p mcause;
   wide_counter_csr_t_p minstret;
@@ -104,11 +107,21 @@ struct state_t
   csr_t_p mcounteren;
   csr_t_p mcountinhibit;
   csr_t_p mevent[N_HPMCOUNTERS];
+#ifndef CPU_NANHU
   csr_t_p mnstatus;
+#else
+  mnstatus_csr_t_p mnstatus;
+#endif
   csr_t_p mnepc;
+#ifdef CPU_NANHU
+  csr_t_p mncause;
+#endif
   csr_t_p scounteren;
   csr_t_p sepc;
   csr_t_p stval;
+#ifdef CPU_NANHU
+  csr_t_p sscratch;
+#endif
   csr_t_p stvec;
   virtualized_csr_t_p satp;
   csr_t_p scause;
@@ -116,9 +129,15 @@ struct state_t
 
   // When taking a trap into HS-mode, we must access the nonvirtualized HS-mode CSRs directly:
   csr_t_p nonvirtual_stvec;
+#ifdef CPU_NANHU
+  satp_csr_t_p nonvirtual_satp;
+#endif
   csr_t_p nonvirtual_scause;
   csr_t_p nonvirtual_sepc;
   csr_t_p nonvirtual_stval;
+#ifdef CPU_NANHU
+  csr_t_p nonvirtual_sscratch;
+#endif
   sstatus_proxy_csr_t_p nonvirtual_sstatus;
 
   csr_t_p mtval2;
@@ -135,6 +154,9 @@ struct state_t
   vsstatus_csr_t_p vsstatus;
   csr_t_p vstvec;
   csr_t_p vsepc;
+#ifdef CPU_NANHU
+  csr_t_p vsscratch;
+#endif
   csr_t_p vscause;
   csr_t_p vstval;
   csr_t_p vsatp;
@@ -154,7 +176,11 @@ struct state_t
   mseccfg_csr_t_p mseccfg;
   csr_t_p mseccfgh;
 
+#ifdef CONFIG_PMP_MAX_NUM
+  static const int max_pmp = CONFIG_PMP_MAX_NUM;
+#else
   static const int max_pmp = 64;
+#endif
   pmpaddr_csr_t_p pmpaddr[max_pmp];
 
   float_csr_t_p fflags;
@@ -328,7 +354,11 @@ public:
     return impl_table[impl];
   }
   reg_t pc_alignment_mask() {
+#ifdef CPU_ROCKET_CHIP
+    const int ialign = extension_enabled('C') ? 16 : 32;
+#else
     const int ialign = extension_enabled(EXT_ZCA) ? 16 : 32;
+#endif
     return ~(reg_t)(ialign == 16 ? 0 : 2);
   }
   reg_t throw_instruction_address_misaligned(reg_t pc);
@@ -444,6 +474,9 @@ public:
 
   vectorUnit_t VU;
   triggers::module_t TM;
+#if defined(DIFFTEST)
+  bool check_interrupt = false;
+#endif
 };
 
 #endif

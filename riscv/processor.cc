@@ -75,7 +75,11 @@ processor_t::processor_t(const char* isa_str, const char* priv_str,
   if (isa.get_max_xlen() == 32)
     set_mmu_capability(IMPL_MMU_SV32);
   else if (isa.get_max_xlen() == 64)
+  #ifdef CONFIG_MMU_CAPABILITY
+    set_mmu_capability(CONFIG_MMU_CAPABILITY);
+  #else
     set_mmu_capability(IMPL_MMU_SV57);
+  #endif
 
   set_impl(IMPL_MMU_ASID, true);
   set_impl(IMPL_MMU_VMID, true);
@@ -156,12 +160,14 @@ void processor_t::reset()
     VU.reset();
   in_wfi = false;
 
+#ifndef DIFFTEST
   if (n_pmp > 0) {
     // For backwards compatibility with software that is unaware of PMP,
     // initialize PMP to permit unprivileged access to all of memory.
     put_csr(CSR_PMPADDR0, ~reg_t(0));
     put_csr(CSR_PMPCFG0, PMP_R | PMP_W | PMP_X | PMP_NAPOT);
   }
+#endif
 
   for (auto e : custom_extensions) { // reset any extensions
     for (auto &csr: e.second->get_csrs(*this))
@@ -260,14 +266,20 @@ reg_t processor_t::select_an_interrupt_with_default_priority(reg_t enabled_inter
     enabled_interrupts = MIP_SSIP;
   else if (enabled_interrupts & MIP_STIP)
     enabled_interrupts = MIP_STIP;
+#ifndef CPU_NANHU
   else if (enabled_interrupts & MIP_LCOFIP)
     enabled_interrupts = MIP_LCOFIP;
+#endif
   else if (enabled_interrupts & MIP_VSEIP)
     enabled_interrupts = MIP_VSEIP;
   else if (enabled_interrupts & MIP_VSSIP)
     enabled_interrupts = MIP_VSSIP;
   else if (enabled_interrupts & MIP_VSTIP)
     enabled_interrupts = MIP_VSTIP;
+#ifdef CPU_NANHU
+  else if (enabled_interrupts & MIP_LCOFIP)
+    enabled_interrupts = MIP_LCOFIP;
+#endif
 
   return enabled_interrupts;
 }
@@ -387,6 +399,18 @@ void processor_t::debug_output_log(std::stringstream *s)
   }
 }
 
+#ifdef CPU_NANHU
+static uint64_t encode_vaddr(uint64_t vaddr) {
+  int64_t hi = (int64_t)vaddr >> 39;
+  if (hi == 0 || hi == -1) {
+    return vaddr;
+  }
+  hi = ((vaddr >> 38) & 0x1) ? 0 : -1;
+  uint64_t mask = (1UL << 39) - 1;
+  return (vaddr & mask) | (hi & (~mask));
+}
+#endif
+
 void processor_t::take_trap(trap_t& t, reg_t epc)
 {
   unsigned max_xlen = isa.get_max_xlen();
@@ -452,7 +476,11 @@ void processor_t::take_trap(trap_t& t, reg_t epc)
     reg_t vector = (state.vstvec->read() & 1) && interrupt ? 4 * adjusted_cause : 0;
     state.pc = (state.vstvec->read() & ~(reg_t)1) + vector;
     state.vscause->write(adjusted_cause | (interrupt ? interrupt_bit : 0));
+#ifdef CPU_ROCKET_CHIP
+    state.vsepc->write(encode_vaddr(epc));
+#else
     state.vsepc->write(epc);
+#endif
     state.vstval->write(t.get_tval());
 
     reg_t s = state.sstatus->read();
@@ -470,7 +498,11 @@ void processor_t::take_trap(trap_t& t, reg_t epc)
     reg_t vector = (state.nonvirtual_stvec->read() & 1) && interrupt ? 4 * bit : 0;
     state.pc = (state.nonvirtual_stvec->read() & ~(reg_t)1) + vector;
     state.nonvirtual_scause->write(t.cause());
+#ifdef CPU_ROCKET_CHIP
+    state.nonvirtual_sepc->write(encode_vaddr(epc));
+#else
     state.nonvirtual_sepc->write(epc);
+#endif
     state.nonvirtual_stval->write(t.get_tval());
     state.htval->write(t.get_tval2());
     state.htinst->write(t.get_tinst());
@@ -504,6 +536,7 @@ void processor_t::take_trap(trap_t& t, reg_t epc)
 
     reg_t s = state.mstatus->read();
     if ( extension_enabled(EXT_SMDBLTRP)) {
+#ifndef CPU_NANHU
       if (get_field(s, MSTATUS_MDT) || !nmie) {
         // Critical error - Double trap in M-mode or trap when nmie is 0
         // RNMI is not modeled else double trap in M-mode would trap to
@@ -512,10 +545,46 @@ void processor_t::take_trap(trap_t& t, reg_t epc)
         return;
       }
       s = set_field(s, MSTATUS_MDT, 1);
+#else
+      bool m_double_trap = get_field(s, MSTATUS_MDT);
+      if (!nmie) {
+        // Critical error - Double trap in M-mode or trap when nmie is 0
+        // RNMI is not modeled else double trap in M-mode would trap to
+        // RNMI handler instead of leading to a critical error
+        state.critical_error = 1;
+        return;
+      }
+      if (m_double_trap) {
+        state.pc = trap_handler_address;
+        reg_t mnstatus_val = state.mnstatus->read();
+        mnstatus_val = set_field(mnstatus_val, MNSTATUS_MNPP, state.prv);
+        mnstatus_val = set_field(mnstatus_val, MNSTATUS_MNPV, curr_virt);
+        mnstatus_val = set_field(mnstatus_val, MNSTATUS_NMIE, 0);
+        state.mnstatus->bare_write(mnstatus_val);
+#ifdef CPU_ROCKET_CHIP
+        state.mnepc->write(encode_vaddr(epc));
+#else
+        state.mnepc->write(epc);
+#endif
+        state.mncause->write(t.cause());
+        set_privilege(PRV_M, false);
+        return;
+      } else {
+        s = set_field(s, MSTATUS_MDT, 1);
+      }
+#endif
     }
 
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+    state.pc = trap_handler_address;
+#else
     state.pc = !nmie ? rnmi_trap_handler_address : trap_handler_address;
+#endif
+#ifdef CPU_ROCKET_CHIP
+    state.mepc->write(encode_vaddr(epc));
+#else
     state.mepc->write(epc);
+#endif
     state.mcause->write(supv_double_trap ? CAUSE_DOUBLE_TRAP : t.cause());
     state.mtval->write(t.get_tval());
     state.mtval2->write(supv_double_trap ? t.cause() : t.get_tval2());

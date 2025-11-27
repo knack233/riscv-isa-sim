@@ -40,6 +40,8 @@ class rom_device_t : public abstract_device_t {
   bool store(reg_t addr, size_t len, const uint8_t* bytes) override;
   reg_t size() override { return data.size(); }
   const std::vector<char>& contents() { return data; }
+
+  std::vector<char>& get_data() { return data; }
  private:
   std::vector<char> data;
 };

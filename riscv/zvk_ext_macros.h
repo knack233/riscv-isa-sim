@@ -744,6 +744,31 @@
 //  - 'vs2_w', unsigned, 2 * SEW width, by value, constant,
 //    a widened copy of 'vs2'.
 //  - 'vs1', unsigned, SEW width, by value, constant.
+#ifdef CPU_NANHU
+#define VI_ZVK_VV_WIDENING_ULOOP(BODY) \
+  do { \
+    VI_CHECK_DSS(true); \
+    VI_LOOP_BASE(1) \
+      switch (sew) { \
+        case e8: { \
+          VI_ZVK_VV_WIDENING_U_PARAMS(e8); \
+          BODY \
+          break; \
+        } \
+        case e16: { \
+          VI_ZVK_VV_WIDENING_U_PARAMS(e16); \
+          BODY \
+          break; \
+        } \
+        case e32: { \
+          VI_ZVK_VV_WIDENING_U_PARAMS(e32); \
+          BODY \
+          break; \
+        } \
+      } \
+    VI_LOOP_END \
+  } while (0)
+#else
 #define VI_ZVK_VV_WIDENING_ULOOP(BODY) \
   do { \
     VI_CHECK_DSS(true); \
@@ -767,6 +792,7 @@
       } \
     VI_LOOP_END \
   } while (0)
+#endif
 
 // Loop macro for widening instructions taking parameters 'vd, vs2, rs1',
 // with logic processing elements one-at-a-time in those register groups
@@ -782,6 +808,31 @@
 //  - 'vs2_w', unsigned, 2 * SEW width, by value, constant,
 //    a widened copy of 'vs2'.
 //  - 'rs1', unsigned, SEW width, by value, constant.
+#ifdef CPU_NANHU
+#define VI_ZVK_VX_WIDENING_ULOOP(BODY) \
+  do { \
+    VI_CHECK_DSS(false); \
+    VI_LOOP_BASE(1) \
+      switch (sew) { \
+        case e8: { \
+          VI_ZVK_VX_WIDENING_U_PARAMS(e8); \
+          BODY \
+          break; \
+        } \
+        case e16: { \
+          VI_ZVK_VX_WIDENING_U_PARAMS(e16); \
+          BODY \
+          break; \
+        } \
+        case e32: { \
+          VI_ZVK_VX_WIDENING_U_PARAMS(e32); \
+          BODY \
+          break; \
+        } \
+      } \
+    VI_LOOP_END \
+  } while (0)
+#else
 #define VI_ZVK_VX_WIDENING_ULOOP(BODY) \
   do { \
     VI_CHECK_DSS(false); \
@@ -805,6 +856,7 @@
       } \
     VI_LOOP_END \
   } while (0)
+#endif
 
 // Loop macro for widening instructions taking parameters 'vd, vs2, zimm5',
 // with logic processing elements one-at-a-time in those register groups
@@ -820,6 +872,31 @@
 //  - 'vs2_w', unsigned, 2 * SEW width, by value, constant,
 //    a widened copy of 'vs2'.
 //  - 'zimm5', unsigned, SEW width, by value, constant.
+#ifdef CPU_NANHU
+#define VI_ZVK_VI_WIDENING_ULOOP(BODY) \
+  do { \
+    VI_CHECK_DSS(false); \
+    VI_LOOP_BASE(1) \
+      switch (sew) { \
+        case e8: { \
+          VI_ZVK_VI_WIDENING_U_PARAMS(e8); \
+          BODY \
+          break; \
+        } \
+        case e16: { \
+          VI_ZVK_VI_WIDENING_U_PARAMS(e16); \
+          BODY \
+          break; \
+        } \
+        case e32: { \
+          VI_ZVK_VI_WIDENING_U_PARAMS(e32); \
+          BODY \
+          break; \
+        } \
+      } \
+    VI_LOOP_END \
+  } while (0)
+#else
 #define VI_ZVK_VI_WIDENING_ULOOP(BODY) \
   do { \
     VI_CHECK_DSS(false); \
@@ -843,6 +920,7 @@
       } \
     VI_LOOP_END \
   } while (0)
+#endif
 
 //
 // Element Group Manipulation Macros

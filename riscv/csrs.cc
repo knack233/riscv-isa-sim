@@ -390,11 +390,21 @@ epc_csr_t::epc_csr_t(processor_t* const proc, const reg_t addr):
 }
 
 reg_t epc_csr_t::read() const noexcept {
+#ifdef CPU_ROCKET_CHIP
+  uint64_t r = this->val & proc->pc_alignment_mask();
+  uint64_t hi = ((r >> 39) & 0x1) ? -1UL : 0;
+  uint64_t mask = (1UL << 40) - 1;
+  return (r & mask) | (hi & (~mask));
+#else
   return val & proc->pc_alignment_mask();
+#endif
 }
 
 bool epc_csr_t::unlogged_write(const reg_t val) noexcept {
   this->val = val & ~(reg_t)1;
+#ifdef CPU_ROCKET_CHIP
+  this->val &= (1UL << 40) - 1;
+#endif
   return true;
 }
 
@@ -409,7 +419,16 @@ reg_t tvec_csr_t::read() const noexcept {
 }
 
 bool tvec_csr_t::unlogged_write(const reg_t val) noexcept {
+#if defined(CPU_NUTSHELL)
+  this->val = val & ~(reg_t)3;
+#elif defined(CPU_NANHU)
+  if((val & (reg_t)3) >= 2)
+    this->val = val & ~(reg_t)3;
+  else
+    this->val = val;
+#else
   this->val = val & ~(reg_t)2;
+#endif
   return true;
 }
 
@@ -495,10 +514,18 @@ vsstatus_csr_t::vsstatus_csr_t(processor_t* const proc, const reg_t addr):
 
 bool vsstatus_csr_t::unlogged_write(const reg_t val) noexcept {
   const reg_t hDTE = (state->henvcfg->read() & HENVCFG_DTE);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  const reg_t adj_write_mask = sstatus_write_mask;
+#else
   const reg_t adj_write_mask = sstatus_write_mask & ~(hDTE ? 0 : SSTATUS_SDT);
+#endif
   reg_t newval = (this->val & ~adj_write_mask) | (val & adj_write_mask);
 
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  newval = (newval & SSTATUS_SDT && hDTE) ? (newval & ~SSTATUS_SIE) : newval;
+#else
   newval = (newval & SSTATUS_SDT) ? (newval & ~SSTATUS_SIE) : newval;
+#endif
 
   if (state->v) maybe_flush_tlb(newval);
   this->val = adjust_sd(newval);
@@ -563,9 +590,20 @@ bool mstatus_csr_t::unlogged_write(const reg_t val) noexcept {
 
   const reg_t requested_mpp = proc->legalize_privilege(get_field(val, MSTATUS_MPP));
   const reg_t adjusted_val = set_field(val, MSTATUS_MPP, requested_mpp);
+#ifdef CPU_ROCKET_CHIP
+  reg_t new_mstatus = (read() & ~mask) | (adjusted_val & mask);
+  unsigned fs = (new_mstatus >> 13) & 0x3;
+  if (fs == 0x1 || fs == 0x2) {
+    new_mstatus |= 0x3 << 13;
+  }
+#elif defined(CPU_NUTSHELL)
+  reg_t new_mstatus = (read() & ~mask) | (adjusted_val & mask);
+  new_mstatus ^= new_mstatus & (0x3 << 13); // FS is always zero
+#else
   reg_t new_mstatus = (read() & ~mask) | (adjusted_val & mask);
   new_mstatus = (new_mstatus & MSTATUS_MDT) ? (new_mstatus & ~MSTATUS_MIE) : new_mstatus;
   new_mstatus = (new_mstatus & MSTATUS_SDT) ? (new_mstatus & ~MSTATUS_SIE) : new_mstatus;
+#endif
   maybe_flush_tlb(new_mstatus);
   this->val = adjust_sd(new_mstatus);
   return true;
@@ -580,18 +618,30 @@ reg_t mstatus_csr_t::compute_mstatus_initial_value() const noexcept {
          | (proc->extension_enabled_const('U') && (proc->get_const_xlen() != 32) ? set_field((reg_t)0, MSTATUS_UXL, xlen_to_uxl(proc->get_const_xlen())) : 0)
          | (proc->extension_enabled_const('S') && (proc->get_const_xlen() != 32) ? set_field((reg_t)0, MSTATUS_SXL, xlen_to_uxl(proc->get_const_xlen())) : 0)
          | (proc->get_mmu()->is_target_big_endian() ? big_endian_bits : 0)
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+         | 0
+#else
          | (proc->extension_enabled(EXT_SMDBLTRP) ? MSTATUS_MDT : 0)
+#endif
          | 0;  // initial value for mstatus
 }
 
 // implement class mnstatus_csr_t
 mnstatus_csr_t::mnstatus_csr_t(processor_t* const proc, const reg_t addr):
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  basic_csr_t(proc, addr, MNSTATUS_NMIE){
+#else
   basic_csr_t(proc, addr, 0) {
+#endif
 }
 
 bool mnstatus_csr_t::unlogged_write(const reg_t val) noexcept {
   // NMIE can be set but not cleared
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  const reg_t mask = MNSTATUS_NMIE
+#else
   const reg_t mask = (~read() & MNSTATUS_NMIE)
+#endif
                    | (proc->extension_enabled('H') ? MNSTATUS_MNPV : 0)
                    | (proc->extension_enabled(EXT_ZICFILP) ? MNSTATUS_MNPELP : 0)
                    | MNSTATUS_MNPP;
@@ -602,6 +652,12 @@ bool mnstatus_csr_t::unlogged_write(const reg_t val) noexcept {
 
   return basic_csr_t::unlogged_write(new_mnstatus);
 }
+
+#ifdef CPU_NANHU
+bool mnstatus_csr_t::bare_write(const reg_t val) noexcept {
+  return basic_csr_t::unlogged_write(val);
+}
+#endif
 
 // implement class rv32_low_csr_t
 rv32_low_csr_t::rv32_low_csr_t(processor_t* const proc, const reg_t addr, csr_t_p orig):
@@ -699,6 +755,18 @@ bool sstatus_csr_t::enabled(const reg_t which) {
 misa_csr_t::misa_csr_t(processor_t* const proc, const reg_t addr, const reg_t max_isa):
   basic_csr_t(proc, addr, max_isa),
   max_isa(max_isa),
+#if defined(CPU_ROCKET_CHIP)
+  write_mask(max_isa & (0  // allow MAFDCV bits in MISA to be modified
+                        | (1L << ('M' - 'A'))
+                        | (1L << ('A' - 'A'))
+                        | (1L << ('F' - 'A'))
+                        | (1L << ('D' - 'A'))
+                        | (1L << ('C' - 'A'))
+                        | (1L << ('V' - 'A'))
+                        )
+#elif defined(CPU_NUTSHELL) || defined(CPU_XIANGSHAN) || defined(CPU_NANHU)
+  write_mask(0 // not allowed
+#else
   write_mask(max_isa & (0  // allow MABFDQCHV bits in MISA to be modified
                         | (1L << ('M' - 'A'))
                         | (1L << ('A' - 'A'))
@@ -710,6 +778,7 @@ misa_csr_t::misa_csr_t(processor_t* const proc, const reg_t addr, const reg_t ma
                         | (1L << ('H' - 'A'))
                         | (1L << ('V' - 'A'))
                         )
+#endif
              ) {
 }
 
@@ -990,19 +1059,29 @@ void medeleg_csr_t::verify_permissions(insn_t insn, bool write) const {
 bool medeleg_csr_t::unlogged_write(const reg_t val) noexcept {
   const reg_t mask = 0
     | (1 << CAUSE_MISALIGNED_FETCH)
+#if !defined(CPU_ROCKET_CHIP)
     | (1 << CAUSE_FETCH_ACCESS)
+#endif
     | (1 << CAUSE_ILLEGAL_INSTRUCTION)
     | (1 << CAUSE_BREAKPOINT)
     | (1 << CAUSE_MISALIGNED_LOAD)
+#if !defined(CPU_ROCKET_CHIP)
     | (1 << CAUSE_LOAD_ACCESS)
+#endif
     | (1 << CAUSE_MISALIGNED_STORE) 
+#if !defined(CPU_ROCKET_CHIP)
     | (1 << CAUSE_STORE_ACCESS)
+#endif
     | (1 << CAUSE_USER_ECALL)
+#if !defined(CPU_ROCKET_CHIP)
     | (1 << CAUSE_SUPERVISOR_ECALL)
+#endif
     | (proc->supports_impl(IMPL_MMU) ? mmu_exceptions : 0)
     | (proc->extension_enabled('H') ? hypervisor_exceptions : 0)
+#if !defined(CPU_NANHU)
     | (1 << CAUSE_SOFTWARE_CHECK_FAULT)
     | (1 << CAUSE_HARDWARE_ERROR_FAULT)
+#endif
     ;
   return basic_csr_t::unlogged_write((read() & ~mask) | (val & mask));
 }
@@ -1083,8 +1162,14 @@ base_atp_csr_t::base_atp_csr_t(processor_t* const proc, const reg_t addr):
 
 bool base_atp_csr_t::unlogged_write(const reg_t val) noexcept {
   const reg_t newval = proc->supports_impl(IMPL_MMU) ? compute_new_satp(val) : 0;
+#ifndef CPU_NANHU
   if (newval != read())
     proc->get_mmu()->flush_tlb();
+#else
+    // It should be safe to change from Bare mode (no translation)
+    bool is_safe = get_field(read(), SATP64_MODE) == SATP_MODE_OFF;
+    proc->get_mmu()->flush_tlb_on_satp_update(is_safe);
+#endif
   return basic_csr_t::unlogged_write(newval);
 }
 
@@ -1107,7 +1192,11 @@ bool base_atp_csr_t::satp_valid(reg_t val) const noexcept {
 }
 
 reg_t base_atp_csr_t::compute_new_satp(reg_t val) const noexcept {
+#ifndef CPU_NANHU
   reg_t rv64_ppn_mask = (reg_t(1) << (proc->paddr_bits() - PGSHIFT)) - 1;
+#else
+  reg_t rv64_ppn_mask = compute_rv64_ppn_mask();
+#endif
 
   reg_t mode_mask = proc->get_xlen() == 32 ? SATP32_MODE : SATP64_MODE;
   reg_t asid_mask_if_enabled = proc->get_xlen() == 32 ? SATP32_ASID : SATP64_ASID;
@@ -1119,6 +1208,26 @@ reg_t base_atp_csr_t::compute_new_satp(reg_t val) const noexcept {
   return (new_mask & val) | (old_mask & read());
 }
 
+#ifdef CPU_NANHU
+reg_t base_atp_csr_t::compute_rv64_ppn_mask() const noexcept {
+  reg_t rv64_ppn_mask;
+  switch(get_field(state->hgatp->read(), HGATP64_MODE)) {
+    case HGATP_MODE_OFF:
+      rv64_ppn_mask = (reg_t(1) << (MAX_PADDR_BITS - PGSHIFT)) - 1;
+      break;
+    case HGATP_MODE_SV39X4:
+      rv64_ppn_mask = (reg_t(1) << (41 - PGSHIFT)) - 1;
+      break;
+    case HGATP_MODE_SV48X4:
+      rv64_ppn_mask = (reg_t(1) << (50 - PGSHIFT)) - 1;
+      break;
+    default:
+      assert(0);
+  }
+  return rv64_ppn_mask;
+}
+#endif
+
 satp_csr_t::satp_csr_t(processor_t* const proc, const reg_t addr):
   base_atp_csr_t(proc, addr) {
 }
@@ -1128,6 +1237,13 @@ void satp_csr_t::verify_permissions(insn_t insn, bool write) const {
   if (get_field(state->mstatus->read(), MSTATUS_TVM))
     require(state->prv == PRV_M);
 }
+
+#ifdef CPU_NANHU
+reg_t satp_csr_t::compute_rv64_ppn_mask() const noexcept {
+  reg_t rv64_ppn_mask = (reg_t(1) << (MAX_PADDR_BITS - PGSHIFT)) - 1;
+  return rv64_ppn_mask;
+}
+#endif
 
 virtualized_satp_csr_t::virtualized_satp_csr_t(processor_t* const proc, satp_csr_t_p orig, csr_t_p virt):
   virtualized_csr_t(proc, orig, virt),
@@ -1290,10 +1406,37 @@ mevent_csr_t::mevent_csr_t(processor_t* const proc, const reg_t addr):
 }
 
 bool mevent_csr_t::unlogged_write(const reg_t val) noexcept {
+#ifndef CPU_NANHU
   const reg_t mask = proc->extension_enabled(EXT_SSCOFPMF) ? MHPMEVENT_OF | MHPMEVENT_MINH
     | (proc->extension_enabled_const('U') ? MHPMEVENT_UINH : 0)
     | (proc->extension_enabled_const('S') ? MHPMEVENT_SINH : 0)
     | (proc->extension_enabled('H') ? MHPMEVENT_VUINH | MHPMEVENT_VSINH : 0) : 0;
+#else
+  reg_t mask = proc->extension_enabled(EXT_SSCOFPMF) ? MHPMEVENT_OF | MHPMEVENT_MINH
+    | (proc->extension_enabled_const('U') ? MHPMEVENT_UINH : 0)
+    | (proc->extension_enabled_const('S') ? MHPMEVENT_SINH : 0)
+    | (proc->extension_enabled('H') ? MHPMEVENT_VUINH | MHPMEVENT_VSINH : 0) : 0;
+  mask = mask | ((reg_t)0xffffffffff);
+  reg_t optype0_mask = 0;
+  reg_t optype1_mask = 0;
+  reg_t optype2_mask = 0;
+  if(((val >> 40 & (reg_t)0x1F) == 4) ||
+     ((val >> 40 & (reg_t)0x1F) == 2) ||
+     ((val >> 40 & (reg_t)0x1F) == 1) ||
+     ((val >> 40 & (reg_t)0x1F) == 0))
+    optype0_mask = 0x1F0000000000;
+  if(((val >> 45 & (reg_t)0x1F) == 4) ||
+     ((val >> 45 & (reg_t)0x1F) == 2) ||
+     ((val >> 45 & (reg_t)0x1F) == 1) ||
+     ((val >> 45 & (reg_t)0x1F) == 0))
+    optype1_mask = 0x3E00000000000;
+  if(((val >> 50 & (reg_t)0x1F) == 4) ||
+     ((val >> 50 & (reg_t)0x1F) == 2) ||
+     ((val >> 50 & (reg_t)0x1F) == 1) ||
+     ((val >> 50 & (reg_t)0x1F) == 0))
+    optype2_mask = 0x7C000000000000;
+  mask = mask | optype0_mask | optype1_mask | optype2_mask;
+#endif
   return basic_csr_t::unlogged_write((read() & ~mask) | (val & mask));
 }
 
@@ -1348,16 +1491,71 @@ bool hgatp_csr_t::unlogged_write(const reg_t val) noexcept {
   return basic_csr_t::unlogged_write((read() & ~mask) | (val & mask));
 }
 
+#ifdef CPU_NANHU
+dtrig_csr_t::dtrig_csr_t(processor_t* const proc, const reg_t addr):
+  dtrig_csr_t(proc, addr, 0) {
+}
+
+dtrig_csr_t::dtrig_csr_t(processor_t* const proc, const reg_t addr, reg_t val):
+  basic_csr_t(proc, addr, val) {
+}
+
+void dtrig_csr_t::verify_permissions(insn_t insn, bool write) const {
+  basic_csr_t::verify_permissions(insn, write);
+  if (!proc->extension_enabled(EXT_SDTRIG))
+    throw trap_illegal_instruction(insn.bits());
+}
+
+const_dtrig_csr_t::const_dtrig_csr_t(processor_t* const proc, const reg_t addr, reg_t val):
+  const_csr_t(proc, addr, val), dtrig(proc, addr) {
+}
+
+void const_dtrig_csr_t::verify_permissions(insn_t insn, bool write) const {
+  const_csr_t::verify_permissions(insn, write);
+  dtrig.verify_permissions(insn, write);
+}
+
+masked_dtrig_csr_t::masked_dtrig_csr_t(processor_t* const proc, const reg_t addr, const reg_t mask, const reg_t init):
+  masked_csr_t(proc, addr, mask, init), dtrig(proc, addr) {
+}
+
+void masked_dtrig_csr_t::verify_permissions(insn_t insn, bool write) const {
+  masked_csr_t::verify_permissions(insn, write);
+  dtrig.verify_permissions(insn, write);
+}
+
+proxy_dtrig_csr_t::proxy_dtrig_csr_t(processor_t* const proc, const reg_t addr, csr_t_p delegate):
+  proxy_csr_t(proc, addr, delegate), dtrig(proc, addr) {
+}
+
+void proxy_dtrig_csr_t::verify_permissions(insn_t insn, bool write) const {
+  proxy_csr_t::verify_permissions(insn, write);
+  dtrig.verify_permissions(insn, write);
+}
+#endif
+
 tselect_csr_t::tselect_csr_t(processor_t* const proc, const reg_t addr):
+#ifndef CPU_NANHU
   basic_csr_t(proc, addr, 0) {
+#else
+  dtrig_csr_t(proc, addr, 0) {
+#endif
 }
 
 bool tselect_csr_t::unlogged_write(const reg_t val) noexcept {
+#ifndef CPU_NANHU
   return basic_csr_t::unlogged_write((val < proc->TM.count()) ? val : read());
+#else
+  return dtrig_csr_t::unlogged_write((val < proc->TM.count()) ? val : read());
+#endif
 }
 
 tdata1_csr_t::tdata1_csr_t(processor_t* const proc, const reg_t addr):
+#ifndef CPU_NANHU
   csr_t(proc, addr) {
+#else
+  dtrig_csr_t(proc, addr) {
+#endif
 }
 
 reg_t tdata1_csr_t::read() const noexcept {
@@ -1369,7 +1567,11 @@ bool tdata1_csr_t::unlogged_write(const reg_t val) noexcept {
 }
 
 tdata2_csr_t::tdata2_csr_t(processor_t* const proc, const reg_t addr):
+#ifndef CPU_NANHU
   csr_t(proc, addr) {
+#else
+  dtrig_csr_t(proc, addr) {
+#endif
 }
 
 reg_t tdata2_csr_t::read() const noexcept {
@@ -1381,7 +1583,11 @@ bool tdata2_csr_t::unlogged_write(const reg_t val) noexcept {
 }
 
 tdata3_csr_t::tdata3_csr_t(processor_t* const proc, const reg_t addr):
+#ifndef CPU_NANHU
   csr_t(proc, addr) {
+#else
+  dtrig_csr_t(proc, addr) {
+#endif
 }
 
 reg_t tdata3_csr_t::read() const noexcept {
@@ -1393,7 +1599,11 @@ bool tdata3_csr_t::unlogged_write(const reg_t val) noexcept {
 }
 
 tinfo_csr_t::tinfo_csr_t(processor_t* const proc, const reg_t addr) :
+#ifndef CPU_NANHU
   csr_t(proc, addr) {
+#else
+  dtrig_csr_t(proc, addr) {
+#endif
 }
 
 reg_t tinfo_csr_t::read() const noexcept {
@@ -1519,6 +1729,14 @@ void float_csr_t::verify_permissions(insn_t insn, bool write) const {
   }
 }
 
+#if defined(DIFFTEST)
+void float_csr_t::write_raw(const reg_t val) noexcept {
+  const bool success = basic_csr_t::unlogged_write(val);
+  if (success)
+    log_write();
+}
+#endif
+
 bool float_csr_t::unlogged_write(const reg_t val) noexcept {
   if (!proc->extension_enabled(EXT_ZFINX))
     dirty_fp_state;
@@ -1609,6 +1827,14 @@ void vxsat_csr_t::verify_permissions(insn_t insn, bool write) const {
   require(proc->any_vector_extensions() && STATE.sstatus->enabled(SSTATUS_VS));
   masked_csr_t::verify_permissions(insn, write);
 }
+
+#if defined(DIFFTEST)
+void vxsat_csr_t::write_raw(const reg_t val) noexcept {
+  const bool success = basic_csr_t::unlogged_write(val);
+  if (success)
+    log_write();
+}
+#endif
 
 bool vxsat_csr_t::unlogged_write(const reg_t val) noexcept {
   dirty_vs_state;
@@ -1722,12 +1948,19 @@ bool henvcfg_csr_t::unlogged_write(const reg_t val) noexcept {
 }
 
 stimecmp_csr_t::stimecmp_csr_t(processor_t* const proc, const reg_t addr, const reg_t imask):
+#ifndef CPU_NANHU
   basic_csr_t(proc, addr, 0), intr_mask(imask) {
+#else
+  basic_csr_t(proc, addr, 0xffffffffffffffff), intr_mask(imask) {
+#endif
 }
 
 bool stimecmp_csr_t::unlogged_write(const reg_t val) noexcept {
+  // When difftesting, ref should never generate any time interrupt.
+#ifndef DIFFTEST
   const reg_t mask = ((state->menvcfg->read() & MENVCFG_STCE) ? MIP_STIP : 0) | ((state->henvcfg->read() & HENVCFG_STCE) ? MIP_VSTIP : 0);
   state->mip->backdoor_write_with_mask(mask, state->time->read() >= val ? intr_mask : 0);
+#endif // DIFFTEST
   return basic_csr_t::unlogged_write(val);
 }
 

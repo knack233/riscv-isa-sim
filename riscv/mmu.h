@@ -35,6 +35,12 @@ const reg_t PGSIZE = 1 << PGSHIFT;
 #define MMU_OBSERVE_STORE(addr, data, length)
 #endif
 
+#ifdef CONFIG_MAX_PADDR_BITS
+#define MAX_PADDR_BITS CONFIG_MAX_PADDR_BITS
+#else
+#define MAX_PADDR_BITS 56 // imposed by Sv39 / Sv48
+#endif
+
 struct insn_fetch_t
 {
   insn_func_t func;
@@ -68,6 +74,9 @@ struct xlate_flags_t {
   const bool lr : 1 {false};
   const bool ss_access : 1 {false};
   const bool clean_inval : 1 {false};
+#ifdef CPU_NANHU
+  const bool vldst : 1 {false};
+#endif
 
   bool is_special_access() const {
     return forced_virt || hlvx || lr || ss_access || clean_inval;
@@ -106,8 +115,15 @@ public:
 
     if (likely(!xlate_flags.is_special_access() && aligned && tlb_hit)) {
       res = *(target_endian<T>*)host_addr;
+#ifdef CPU_NANHU
+      sim->difftest_log_mem_load(host_addr, &res, sizeof(T));
+#endif
     } else {
+#ifndef CPU_NANHU
       load_slow_path(addr, sizeof(T), (uint8_t*)&res, xlate_flags);
+#else
+      load_slow_path(addr, sizeof(T), (uint8_t*)&res, xlate_flags, false);
+#endif
     }
 
     MMU_OBSERVE_LOAD(addr,from_target(res),sizeof(T));
@@ -115,9 +131,33 @@ public:
     return from_target(res);
   }
 
+#ifdef CPU_NANHU
+  template<typename T>
+  T ALWAYS_INLINE amo_load(reg_t addr, xlate_flags_t xlate_flags = {}) {
+    target_endian<T> res;
+    bool aligned = (addr & (sizeof(T) - 1)) == 0;
+    auto [tlb_hit, host_addr, _] = access_tlb(tlb_load, addr);
+
+    if (likely(!xlate_flags.is_special_access() && aligned && tlb_hit)) {
+      res = *(target_endian<T>*)host_addr;
+      sim->difftest_log_mem_load(host_addr, &res, sizeof(T));
+    } else {
+      load_slow_path(addr, sizeof(T), (uint8_t*)&res, xlate_flags, false);
+    }
+
+    MMU_OBSERVE_LOAD(addr,from_target(res),sizeof(T));
+
+    return from_target(res);
+  }
+#endif
+
   template<typename T>
   T load_reserved(reg_t addr) {
+#ifndef CPU_NANHU
     return load<T>(addr, {.lr = true});
+#else
+    return amo_load<T>(addr, {.lr = true});
+#endif
   }
 
   template<typename T>
@@ -146,11 +186,43 @@ public:
 
     if (!xlate_flags.is_special_access() && likely(aligned && tlb_hit)) {
       *(target_endian<T>*)host_addr = to_target(val);
+#ifdef CPU_NANHU
+      auto v = to_target(val);
+      auto vpn = addr / PGSIZE, pgoff = addr % PGSIZE;
+      auto& entry = tlb_store[vpn % TLB_ENTRIES];
+      auto target_addr = entry.data.target_addr + pgoff;
+      sim->difftest_log_mem_store(target_addr, &v, sizeof(T));
+#endif
     } else {
       target_endian<T> target_val = to_target(val);
+#ifndef CPU_NANHU
       store_slow_path(addr, sizeof(T), (const uint8_t*)&target_val, xlate_flags, true, false);
+#else
+      store_slow_path(addr, sizeof(T), (const uint8_t*)&target_val, xlate_flags, true, false, false);
+#endif
     }
   }
+
+#ifdef CPU_NANHU
+  template<typename T>
+  void ALWAYS_INLINE amo_store(reg_t addr, T val, xlate_flags_t xlate_flags = {}) {
+    MMU_OBSERVE_STORE(addr, val, sizeof(T));
+    bool aligned = (addr & (sizeof(T) - 1)) == 0;
+    auto [tlb_hit, host_addr, _] = access_tlb(tlb_store, addr);
+
+    if (!xlate_flags.is_special_access() && likely(aligned && tlb_hit)) {
+      *(target_endian<T>*)host_addr = to_target(val);
+      auto v = to_target(val);
+      auto vpn = addr / PGSIZE, pgoff = addr % PGSIZE;
+      auto& entry = tlb_store[vpn % TLB_ENTRIES];
+      auto target_addr = entry.data.target_addr + pgoff;
+      sim->difftest_log_mem_store(target_addr, &v, sizeof(T));
+    } else {
+      target_endian<T> target_val = to_target(val);
+      store_slow_path(addr, sizeof(T), (const uint8_t*)&target_val, xlate_flags, true, false, true);
+    }
+  }
+#endif
 
   template<typename T>
   void guest_store(reg_t addr, T val) {
@@ -184,9 +256,21 @@ public:
   template<typename T, typename op>
   T amo(reg_t addr, op f) {
     convert_load_traps_to_store_traps({
+#ifndef CPU_NANHU
       store_slow_path(addr, sizeof(T), nullptr, {}, false, true);
       auto lhs = load<T>(addr);
       store<T>(addr, f(lhs));
+#else
+      xlate_flags_t xlate_flags = {};
+      auto access_info = generate_access_info(addr, LOAD, xlate_flags);
+      reg_t transformed_addr = access_info.transformed_vaddr;
+      check_triggers(triggers::OPERATION_LOAD, transformed_addr, access_info.effective_virt);
+
+      store_slow_path(addr, sizeof(T), nullptr, {}, false, true, true);
+      auto lhs = amo_load<T>(addr);
+      sim->is_amo = true;
+      amo_store<T>(addr, f(lhs));
+#endif
       return lhs;
     })
   }
@@ -194,7 +278,11 @@ public:
   // for shadow stack amoswap
   template<typename T>
   T ssamoswap(reg_t addr, reg_t value) {
+#ifndef CPU_NANHU
       store_slow_path(addr, sizeof(T), nullptr, {.ss_access=true}, false, true);
+#else
+      store_slow_path(addr, sizeof(T), nullptr, {.ss_access=true}, false, true, true);
+#endif
       auto data = load<T>(addr, {.ss_access=true});
       store<T>(addr, value, {.ss_access=true});
       return data;
@@ -203,10 +291,19 @@ public:
   template<typename T>
   T amo_compare_and_swap(reg_t addr, T comp, T swap) {
     convert_load_traps_to_store_traps({
+#ifndef CPU_NANHU
       store_slow_path(addr, sizeof(T), nullptr, {}, false, true);
       auto lhs = load<T>(addr);
       if (lhs == comp)
         store<T>(addr, swap);
+#else
+      store_slow_path(addr, sizeof(T), nullptr, {}, false, true, true);
+      auto lhs = amo_load<T>(addr);
+      if (lhs == comp){
+        sim->is_amo = true;
+        store<T>(addr, swap);
+      }
+#endif
       return lhs;
     })
   }
@@ -238,10 +335,17 @@ public:
     reg_t transformed_addr = access_info.transformed_vaddr;
 
     auto base = transformed_addr & ~(blocksz - 1);
+#ifdef CPU_NANHU
+      for (size_t offset = 0; offset < (512/blocksz); offset += 1) {
+        check_triggers(triggers::OPERATION_STORE, base + (offset * 8), false, transformed_addr, std::nullopt);
+        store<uint64_t>(base + (offset * 8), 0);
+      }
+#else
     for (size_t offset = 0; offset < blocksz; offset += 1) {
       check_triggers(triggers::OPERATION_STORE, base + offset, false, transformed_addr, std::nullopt);
       store<uint8_t>(base + offset, 0);
     }
+#endif
   }
 
   void clean_inval(reg_t addr, bool clean, bool inval) {
@@ -271,15 +375,27 @@ public:
   {
     if (vaddr & (size-1)) {
       // Raise either access fault or misaligned exception
+#ifndef CPU_NANHU
       store_slow_path(vaddr, size, nullptr, {}, false, true);
+#else
+      store_slow_path(vaddr, size, nullptr, {}, false, true, true);
+#endif
     }
 
     auto [tlb_hit, host_addr, paddr] = access_tlb(tlb_store, vaddr);
     if (!tlb_hit)
       paddr = translate(generate_access_info(vaddr, STORE, {}), 1);
 
+#ifndef CPU_NANHU
     if (sim->reservable(paddr))
       return load_reservation_address == paddr;
+#else
+    if (sim->reservable(paddr)){
+      // We assume practical hardware designs would have 64-byte (1 << 6 bytes) reservation sets.
+      auto index = [](reg_t addr) { return addr >> 6; };
+      return index(load_reservation_address) == index(paddr); 
+    }
+#endif
     else
       throw trap_store_access_fault((proc) ? proc->state.v : false, vaddr, 0, 0);
   }
@@ -287,10 +403,30 @@ public:
   template<typename T>
   bool store_conditional(reg_t addr, T val)
   {
+#ifndef CPU_NANHU
     bool have_reservation = check_load_reservation(addr, sizeof(T));
 
     if (have_reservation)
       store(addr, val);
+#else
+    xlate_flags_t xlate_flags = {};
+    auto access_info = generate_access_info(addr, STORE, xlate_flags);
+    reg_t transformed_addr = access_info.transformed_vaddr;
+    check_triggers(triggers::OPERATION_STORE, transformed_addr, access_info.effective_virt);
+
+    bool have_reservation = check_load_reservation(addr, sizeof(T));
+
+    if (have_reservation && sim->sc_failed) {
+      sim->difftest_log("The REF is forced to have an SC failure according to the DUT.");
+      have_reservation = false;
+    }
+    sim->sc_failed = false;
+
+    if (have_reservation) {
+      sim->is_amo = true;
+      store(addr, val);
+    }
+#endif
 
     yield_load_reservation();
 
@@ -330,6 +466,9 @@ public:
     entry->data = fetch;
 
     auto [check_tracer, _, paddr] = access_tlb(tlb_insn, addr, TLB_FLAGS, TLB_CHECK_TRACER);
+#ifdef CPU_NANHU
+    sim->difftest_log_mem_instr(paddr, &insn, sizeof(insn));
+#endif
     if (unlikely(check_tracer)) {
       if (tracer.interested_in_range(paddr, paddr + 1, FETCH)) {
         entry->tag = -1;
@@ -366,8 +505,16 @@ public:
     return std::make_tuple(hit, host_addr, paddr);
   }
 
+#ifndef CPU_NANHU
   void flush_tlb();
   void flush_icache();
+#else
+  void flush_tlb();
+  void flush_tlb_on_sfence_vma();
+  void flush_tlb_on_satp_update(bool is_safe);
+  void flush_icache();
+  void flush_icache_on_fence_i();
+#endif
 
   void register_memtracer(memtracer_t*);
 
@@ -390,6 +537,13 @@ public:
   {
     return target_big_endian? target_endian<T>::to_be(n) : target_endian<T>::to_le(n);
   }
+
+#ifdef CPU_NANHU
+  void set_cache_blocksz(reg_t size)
+  {
+    blocksz = size;
+  }
+#endif
 
 private:
   simif_t* sim;
@@ -438,10 +592,18 @@ private:
   typedef uint16_t insn_parcel_t;
   insn_parcel_t fetch_slow_path(reg_t addr);
   insn_parcel_t perform_intrapage_fetch(reg_t vaddr, uintptr_t host_addr, reg_t paddr);
+#ifndef CPU_NANHU
   void load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags);
+#else
+  void load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags , bool is_amo);
+#endif
   void load_slow_path_intrapage(reg_t len, uint8_t* bytes, mem_access_info_t access_info);
   void perform_intrapage_load(reg_t vaddr, uintptr_t host_addr, reg_t paddr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags);
+#ifndef CPU_NANHU
   void store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags, bool actually_store, bool require_alignment);
+#else
+  void store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags, bool actually_store, bool require_alignment , bool is_amo);
+#endif
   void store_slow_path_intrapage(reg_t len, const uint8_t* bytes, mem_access_info_t access_info, bool actually_store);
   void perform_intrapage_store(reg_t vaddr, uintptr_t host_addr, reg_t paddr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags);
   bool mmio_fetch(reg_t paddr, size_t len, uint8_t* bytes);
@@ -484,6 +646,9 @@ private:
     target_endian<T> target_pte;
     if (host_pte_addr) {
       memcpy(&target_pte, host_pte_addr, ptesize);
+#ifdef CPU_NANHU
+      sim->difftest_log_mem_ptw(pte_paddr, host_pte_addr, ptesize);
+#endif
     } else if (!mmio_load(pte_paddr, ptesize, (uint8_t*)&target_pte)) {
       throw_access_exception(virt, addr, trap_type);
     }

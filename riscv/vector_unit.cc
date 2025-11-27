@@ -29,7 +29,12 @@ void vectorUnit_t::vectorUnit_t::reset()
 
 reg_t vectorUnit_t::vectorUnit_t::set_vl(int rd, int rs1, reg_t reqVL, reg_t newType)
 {
+#ifndef CPU_NANHU
   if (vtype->read() != newType) {
+#else
+  /* After adding force_override, this condition will always be true */
+  if (vtype->read() != newType || p->get_cfg().force_override) {
+#endif
     int new_vlmul = int8_t(extract64(newType, 0, 3) << 5) >> 5;
     auto old_vlmax = vlmax;
 

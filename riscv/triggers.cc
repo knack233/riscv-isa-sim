@@ -174,8 +174,13 @@ reg_t mcontrol_t::tdata1_read(const processor_t * const proc) const noexcept {
   v = set_field(v, MCONTROL_TYPE(xlen), CSR_TDATA1_TYPE_MCONTROL);
   v = set_field(v, CSR_MCONTROL_DMODE(xlen), dmode);
   v = set_field(v, MCONTROL_MASKMAX(xlen), maskmax);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  v = set_field(v, CSR_MCONTROL_HIT, 0);
+  v = set_field(v, MCONTROL_SELECT, 0);
+#else
   v = set_field(v, CSR_MCONTROL_HIT, hit);
   v = set_field(v, MCONTROL_SELECT, select);
+#endif
   v = set_field(v, MCONTROL_TIMING, timing);
   v = set_field(v, MCONTROL_ACTION, action);
   v = set_field(v, MCONTROL_CHAIN, chain);
@@ -193,8 +198,13 @@ void mcontrol_t::tdata1_write(processor_t * const proc, const reg_t val, const b
   auto xlen = proc->get_xlen();
   assert(get_field(val, CSR_MCONTROL_TYPE(xlen)) == CSR_TDATA1_TYPE_MCONTROL);
   dmode = get_field(val, CSR_MCONTROL_DMODE(xlen));
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  hit = 0;
+  select = 0;
+#else
   hit = get_field(val, CSR_MCONTROL_HIT);
   select = get_field(val, MCONTROL_SELECT);
+#endif
   timing = legalize_timing(val, MCONTROL_TIMING, MCONTROL_SELECT, MCONTROL_EXECUTE, MCONTROL_LOAD);
   action = legalize_action(val, MCONTROL_ACTION, CSR_MCONTROL_DMODE(xlen));
   chain = allow_chain ? get_field(val, MCONTROL_CHAIN) : 0;
@@ -313,8 +323,13 @@ reg_t mcontrol6_t::tdata1_read(const processor_t * const proc) const noexcept {
   tdata1 = set_field(tdata1, CSR_MCONTROL6_HIT1, hit >> 1); // MSB of 2-bit field
   tdata1 = set_field(tdata1, CSR_MCONTROL6_VS, proc->extension_enabled('H') ? vs : 0);
   tdata1 = set_field(tdata1, CSR_MCONTROL6_VU, proc->extension_enabled('H') ? vu : 0);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  tdata1 = set_field(tdata1, CSR_MCONTROL6_HIT0,  0);
+  tdata1 = set_field(tdata1, CSR_MCONTROL6_SELECT, 0);
+#else
   tdata1 = set_field(tdata1, CSR_MCONTROL6_HIT0, hit & 1); // LSB of 2-bit field
   tdata1 = set_field(tdata1, CSR_MCONTROL6_SELECT, select);
+#endif
   tdata1 = set_field(tdata1, CSR_MCONTROL6_ACTION, action);
   tdata1 = set_field(tdata1, CSR_MCONTROL6_CHAIN, chain);
   tdata1 = set_field(tdata1, CSR_MCONTROL6_MATCH, match);
@@ -334,8 +349,13 @@ void mcontrol6_t::tdata1_write(processor_t * const proc, const reg_t val, const 
   const reg_t maskmax6 = xlen - 1;
   vs = get_field(val, CSR_MCONTROL6_VS);
   vu = get_field(val, CSR_MCONTROL6_VU);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  hit = (hit_t)0;
+  select = 0;
+#else
   hit = hit_t(2 * get_field(val, CSR_MCONTROL6_HIT1) + get_field(val, CSR_MCONTROL6_HIT0)); // 2-bit field {hit1,hit0}
   select = get_field(val, CSR_MCONTROL6_SELECT);
+#endif
   action = legalize_action(val, CSR_MCONTROL6_ACTION, CSR_MCONTROL6_DMODE(xlen));
   chain = allow_chain ? get_field(val, CSR_MCONTROL6_CHAIN) : 0;
   match = legalize_match(get_field(val, CSR_MCONTROL6_MATCH), maskmax6);
@@ -387,7 +407,11 @@ reg_t icount_t::tdata1_read(const processor_t * const proc) const noexcept
   tdata1 = set_field(tdata1, CSR_ICOUNT_DMODE(xlen), dmode);
   tdata1 = set_field(tdata1, CSR_ICOUNT_VS, proc->extension_enabled('H') ? vs : 0);
   tdata1 = set_field(tdata1, CSR_ICOUNT_VU, proc->extension_enabled('H') ? vu : 0);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  tdata1 = set_field(tdata1, CSR_ICOUNT_HIT, 0);
+#else
   tdata1 = set_field(tdata1, CSR_ICOUNT_HIT, hit);
+#endif
   tdata1 = set_field(tdata1, CSR_ICOUNT_COUNT, count_read_value);
   tdata1 = set_field(tdata1, CSR_ICOUNT_M, m);
   tdata1 = set_field(tdata1, CSR_ICOUNT_PENDING, pending_read_value);
@@ -404,7 +428,11 @@ void icount_t::tdata1_write(processor_t * const proc, const reg_t val, const boo
   dmode = proc->get_state()->debug_mode ? get_field(val, CSR_ICOUNT_DMODE(xlen)) : 0;
   vs = get_field(val, CSR_ICOUNT_VS);
   vu = get_field(val, CSR_ICOUNT_VU);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  hit = 0;
+#else
   hit = get_field(val, CSR_ICOUNT_HIT);
+#endif
   count = count_read_value = get_field(val, CSR_ICOUNT_COUNT);
   m = get_field(val, CSR_ICOUNT_M);
   pending = pending_read_value = get_field(val, CSR_ICOUNT_PENDING);
@@ -425,7 +453,11 @@ reg_t itrigger_t::tdata1_read(const processor_t * const proc) const noexcept
   reg_t tdata1 = 0;
   tdata1 = set_field(tdata1, CSR_ITRIGGER_TYPE(xlen), CSR_TDATA1_TYPE_ITRIGGER);
   tdata1 = set_field(tdata1, CSR_ITRIGGER_DMODE(xlen), dmode);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  tdata1 = set_field(tdata1, CSR_ITRIGGER_HIT(xlen), 0);
+#else
   tdata1 = set_field(tdata1, CSR_ITRIGGER_HIT(xlen), hit);
+#endif
   tdata1 = set_field(tdata1, CSR_ITRIGGER_VS, proc->extension_enabled('H') ? vs : 0);
   tdata1 = set_field(tdata1, CSR_ITRIGGER_VU, proc->extension_enabled('H') ? vu : 0);
   tdata1 = set_field(tdata1, CSR_ITRIGGER_NMI, nmi);
@@ -441,7 +473,11 @@ void itrigger_t::tdata1_write(processor_t * const proc, const reg_t val, const b
   auto xlen = proc->get_xlen();
   assert(get_field(val, CSR_ITRIGGER_TYPE(xlen)) == CSR_TDATA1_TYPE_ITRIGGER);
   dmode = get_field(val, CSR_ITRIGGER_DMODE(xlen));
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  hit = 0;
+#else
   hit = get_field(val, CSR_ITRIGGER_HIT(xlen));
+#endif
   vs = get_field(val, CSR_ITRIGGER_VS);
   vu = get_field(val, CSR_ITRIGGER_VU);
   nmi = get_field(val, CSR_ITRIGGER_NMI);
@@ -479,7 +515,11 @@ reg_t etrigger_t::tdata1_read(const processor_t * const proc) const noexcept
   reg_t tdata1 = 0;
   tdata1 = set_field(tdata1, CSR_ETRIGGER_TYPE(xlen), CSR_TDATA1_TYPE_ETRIGGER);
   tdata1 = set_field(tdata1, CSR_ETRIGGER_DMODE(xlen), dmode);
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  tdata1 = set_field(tdata1, CSR_ETRIGGER_HIT(xlen), 0);
+#else
   tdata1 = set_field(tdata1, CSR_ETRIGGER_HIT(xlen), hit);
+#endif
   tdata1 = set_field(tdata1, CSR_ETRIGGER_VS, proc->extension_enabled('H') ? vs : 0);
   tdata1 = set_field(tdata1, CSR_ETRIGGER_VU, proc->extension_enabled('H') ? vu : 0);
   tdata1 = set_field(tdata1, CSR_ETRIGGER_M, m);
@@ -494,7 +534,11 @@ void etrigger_t::tdata1_write(processor_t * const proc, const reg_t val, const b
   auto xlen = proc->get_xlen();
   assert(get_field(val, CSR_ETRIGGER_TYPE(xlen)) == CSR_TDATA1_TYPE_ETRIGGER);
   dmode = get_field(val, CSR_ETRIGGER_DMODE(xlen));
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  hit = 0;
+#else
   hit = get_field(val, CSR_ETRIGGER_HIT(xlen));
+#endif
   vs = get_field(val, CSR_ETRIGGER_VS);
   vu = get_field(val, CSR_ETRIGGER_VU);
   m = get_field(val, CSR_ETRIGGER_M);
@@ -632,8 +676,10 @@ std::optional<match_result_t> module_t::detect_memory_access_match(operation_t o
 
 std::optional<match_result_t> module_t::detect_icount_match() noexcept
 {
+#ifndef CPU_NANHU
   for (auto trigger: triggers)
     trigger->stash_read_values();
+#endif
 
   state_t * const state = proc->get_state();
   if (state->debug_mode)
@@ -648,6 +694,10 @@ std::optional<match_result_t> module_t::detect_icount_match() noexcept
   if (ret == std::nullopt || ret->action != MCONTROL_ACTION_DEBUG_MODE)
     for (auto trigger: triggers)
       trigger->detect_icount_decrement(proc);
+#ifdef CPU_NANHU
+    for (auto trigger: triggers)
+      trigger->stash_read_values();
+#endif
   return ret;
 }
 
@@ -668,6 +718,9 @@ std::optional<match_result_t> module_t::detect_trap_match(const trap_t& t) noexc
 
 reg_t module_t::tinfo_read(unsigned UNUSED index) const noexcept
 {
+#if defined(DIFFTEST) && (defined(CPU_XIANGSHAN) || defined(CPU_NANHU))
+  return (1 << CSR_TDATA1_TYPE_MCONTROL6) ;
+#else
   /* In spike, every trigger supports the same types. */
   return (1 << CSR_TDATA1_TYPE_MCONTROL) |
          (1 << CSR_TDATA1_TYPE_ICOUNT) |
@@ -676,6 +729,7 @@ reg_t module_t::tinfo_read(unsigned UNUSED index) const noexcept
          (1 << CSR_TDATA1_TYPE_MCONTROL6) |
          (1 << CSR_TDATA1_TYPE_DISABLED) |
          (CSR_TINFO_VERSION_1 << CSR_TINFO_VERSION_OFFSET);
+#endif
 }
 
 }

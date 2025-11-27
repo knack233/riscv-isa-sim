@@ -271,6 +271,9 @@ typedef std::shared_ptr<mstatus_csr_t> mstatus_csr_t_p;
 class mnstatus_csr_t final: public basic_csr_t {
  public:
   mnstatus_csr_t(processor_t* const proc, const reg_t addr);
+#ifdef CPU_NANHU
+  bool bare_write(const reg_t val) noexcept;
+#endif
  protected:
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
@@ -536,12 +539,18 @@ class base_atp_csr_t: public basic_csr_t {
   virtual bool unlogged_write(const reg_t val) noexcept override;
  private:
   reg_t compute_new_satp(reg_t val) const noexcept;
+#ifdef CPU_NANHU
+  virtual reg_t compute_rv64_ppn_mask() const noexcept;
+#endif
 };
 
 class satp_csr_t: public base_atp_csr_t {
  public:
   satp_csr_t(processor_t* const proc, const reg_t addr);
   virtual void verify_permissions(insn_t insn, bool write) const override;
+#ifdef CPU_NANHU
+  virtual reg_t compute_rv64_ppn_mask() const noexcept override;
+#endif
 };
 
 typedef std::shared_ptr<satp_csr_t> satp_csr_t_p;
@@ -579,6 +588,10 @@ class wide_counter_csr_t: public csr_t {
 };
 
 typedef std::shared_ptr<wide_counter_csr_t> wide_counter_csr_t_p;
+
+#ifdef CPU_NANHU
+typedef std::shared_ptr<mnstatus_csr_t> mnstatus_csr_t_p;
+#endif
 
 class time_counter_csr_t: public csr_t {
  public:
@@ -656,14 +669,58 @@ class hgatp_csr_t: public basic_csr_t {
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
 
+#ifndef CPU_NANHU
 class tselect_csr_t: public basic_csr_t {
  public:
   tselect_csr_t(processor_t* const proc, const reg_t addr);
  protected:
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
+#else
+class dtrig_csr_t: public basic_csr_t {
+ public:
+  dtrig_csr_t(processor_t* const proc, const reg_t addr);
+  dtrig_csr_t(processor_t* const proc, const reg_t addr, reg_t val);
+  virtual void verify_permissions(insn_t insn, bool write) const override;
+};
+ 
+class const_dtrig_csr_t: public const_csr_t {
+ public:
+  const_dtrig_csr_t(processor_t* const proc, const reg_t addr, reg_t val);
+  virtual void verify_permissions(insn_t insn, bool write) const override;
+ protected:
+  dtrig_csr_t dtrig;
+};
 
+class masked_dtrig_csr_t: public masked_csr_t {
+ public:
+  masked_dtrig_csr_t(processor_t* const proc, const reg_t addr, const reg_t mask, const reg_t init);
+  virtual void verify_permissions(insn_t insn, bool write) const override;
+ protected:
+  dtrig_csr_t dtrig;
+};
+
+class proxy_dtrig_csr_t: public proxy_csr_t {
+ public:
+  proxy_dtrig_csr_t(processor_t* const proc, const reg_t addr, csr_t_p delegate);
+  virtual void verify_permissions(insn_t insn, bool write) const override;
+ protected:
+  dtrig_csr_t dtrig;
+};
+
+class tselect_csr_t: public dtrig_csr_t {
+ public:
+  tselect_csr_t(processor_t* const proc, const reg_t addr);
+ protected:
+  virtual bool unlogged_write(const reg_t val) noexcept override;
+};
+#endif
+
+#ifndef CPU_NANHU
 class tdata1_csr_t: public csr_t {
+#else
+class tdata1_csr_t: public dtrig_csr_t {
+#endif
  public:
   tdata1_csr_t(processor_t* const proc, const reg_t addr);
   virtual reg_t read() const noexcept override;
@@ -671,7 +728,11 @@ class tdata1_csr_t: public csr_t {
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
 
+#ifndef CPU_NANHU
 class tdata2_csr_t: public csr_t {
+#else
+class tdata2_csr_t: public dtrig_csr_t {
+#endif
  public:
   tdata2_csr_t(processor_t* const proc, const reg_t addr);
   virtual reg_t read() const noexcept override;
@@ -679,7 +740,11 @@ class tdata2_csr_t: public csr_t {
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
 
+#ifndef CPU_NANHU
 class tdata3_csr_t: public csr_t {
+#else
+class tdata3_csr_t: public dtrig_csr_t {
+#endif
  public:
   tdata3_csr_t(processor_t* const proc, const reg_t addr);
   virtual reg_t read() const noexcept override;
@@ -687,7 +752,11 @@ class tdata3_csr_t: public csr_t {
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
 
+#ifndef CPU_NANHU
 class tinfo_csr_t: public csr_t {
+#else
+class tinfo_csr_t: public dtrig_csr_t {
+#endif
  public:
   tinfo_csr_t(processor_t* const proc, const reg_t addr);
   virtual reg_t read() const noexcept override;
@@ -739,6 +808,10 @@ class float_csr_t final: public masked_csr_t {
  public:
   float_csr_t(processor_t* const proc, const reg_t addr, const reg_t mask, const reg_t init);
   virtual void verify_permissions(insn_t insn, bool write) const override;
+#if defined(DIFFTEST)
+  // Write without regard to mask, and without touching mstatus.FS
+  void write_raw(const reg_t val) noexcept;
+#endif
  protected:
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
@@ -789,9 +862,17 @@ class vxsat_csr_t: public masked_csr_t {
  public:
   vxsat_csr_t(processor_t* const proc, const reg_t addr);
   virtual void verify_permissions(insn_t insn, bool write) const override;
+#if defined(DIFFTEST)
+  // Write without regard to mask, and without touching mstatus.VS
+  void write_raw(const reg_t val) noexcept;
+#endif
  protected:
   virtual bool unlogged_write(const reg_t val) noexcept override;
 };
+
+#if defined(DIFFTEST)
+typedef std::shared_ptr<vxsat_csr_t> vxsat_csr_t_p;
+#endif
 
 class hstateen_csr_t: public basic_csr_t {
  public:

@@ -1,4 +1,5 @@
 // vmv_s_x: vd[0] = rs1
+#include <algorithm>
 require_vector(true);
 require(insn.v_vm() == 1);
 require(P.VU.vsew >= e8 && P.VU.vsew <= e64);
@@ -22,6 +23,27 @@ if (vl > 0 && P.VU.vstart->read() < vl) {
     P.VU.elt<uint64_t>(rd_num, 0, true) = RS1;
     break;
   }
+
+#ifdef CPU_NANHU
+  if(1 == P.VU.vta) {
+    for (reg_t i = std::max(P.VU.vstart->read(), (long unsigned int)1); i < P.VU.VLEN/P.VU.vsew; ++i) {
+      switch (sew) {
+      case e8:
+        P.VU.elt<uint8_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint8_t>(rd_num, i, false));
+        break;
+      case e16:
+        P.VU.elt<uint16_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint16_t>(rd_num, i, false));
+        break;
+      case e32:
+        P.VU.elt<uint32_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint32_t>(rd_num, i, false));
+        break;
+      default:
+        P.VU.elt<uint64_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint64_t>(rd_num, i, false));
+        break;
+      }
+    }
+  }
+#endif
 
   vl = 0;
 }

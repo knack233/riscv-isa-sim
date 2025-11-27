@@ -62,9 +62,13 @@ sim_t::sim_t(const cfg_t *cfg, bool halted,
     remote_bitbang(NULL),
     debug_module(this, dm_config)
 {
+#if !defined(SPIKE_FUZZ) && !defined(DIFFTEST)
   signal(SIGINT, &handle_signal);
+#endif
 
+#ifndef DIFFTEST
   sout_.rdbuf(std::cerr.rdbuf()); // debug output goes to stderr by default
+#endif // DIFFTEST
 
   for (auto& x : mems)
     bus.add_device(x.first, x.second);
@@ -355,6 +359,13 @@ bool sim_t::mmio_store(reg_t paddr, size_t len, const uint8_t* bytes)
     return false;
   return bus.store(paddr, len, bytes);
 }
+
+#ifdef CPU_NANHU
+bool sim_t::set_mmio(reg_t paddr, size_t len, const uint8_t* bytes)
+{
+  return mmio_store(paddr, len, bytes);
+}
+#endif
 
 void sim_t::set_rom()
 {

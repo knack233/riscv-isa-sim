@@ -245,8 +245,14 @@ void processor_t::step(size_t n)
 
     try
     {
+#if defined(DIFFTEST)
+      if (check_interrupt) {
+        take_pending_interrupt();
+      }
+#else
       take_pending_interrupt();
 
+#endif
       check_if_lpad_required();
 
       if (unlikely(slow_path()))
@@ -276,14 +282,20 @@ void processor_t::step(size_t n)
           }
 
           // debug mode wfis must nop
+          // difftest wfis must nop too
+          #ifndef DIFFTEST
           if (unlikely(in_wfi && !state.debug_mode)) {
             throw wait_for_interrupt_t();
           }
+          #endif
 
           in_wfi = false;
           insn_fetch_t fetch = mmu->load_insn(pc);
           if (debug && !state.serialized)
             disasm(fetch.insn);
+#ifdef DIFFTEST
+          sim->difftest_log("pc = 0x%lx inst 0x%x", pc, fetch.insn);
+#endif
           pc = execute_insn_logged(this, pc, fetch);
           advance_pc();
 
@@ -304,6 +316,9 @@ void processor_t::step(size_t n)
         // Main simulation loop, fast path.
         for (auto ic_entry = _mmu->access_icache(pc); instret < n; instret++) {
           auto fetch = ic_entry->data;
+#ifdef DIFFTEST
+          sim->difftest_log("pc = 0x%lx inst 0x%x", pc, fetch.insn);
+#endif
           ic_entry = ic_entry->next;
           auto new_pc = execute_insn_fast(this, pc, fetch);
           if (unlikely(ic_entry->tag != new_pc)) {

@@ -78,6 +78,7 @@ public:
   bool                    explicit_hartids;
   bool                    real_time_clint;
   reg_t                   trigger_count;
+  bool                    force_override;
   reg_t                   cache_blocksz;
   std::optional<abstract_sim_if_t*> external_simulator;
 

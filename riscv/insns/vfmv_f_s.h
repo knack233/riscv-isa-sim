@@ -1,5 +1,8 @@
 // vfmv_f_s: rd = vs2[0] (rs1=0)
 VI_VFP_COMMON;
+#ifdef CPU_NANHU
+require_vector_nodirty(true)
+#endif
 
 uint64_t vs2_0 = 0;
 const reg_t sew = P.VU.vsew;

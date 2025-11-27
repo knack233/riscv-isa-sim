@@ -11,7 +11,14 @@ require_align(rd_num, P.VU.vflmul);
 require_noover(rd_num, P.VU.vflmul, rs2_num, 1);
 
 int cnt = 0;
+#ifndef CPU_NANHU
 for (reg_t i = 0; i < vl; ++i) {
+#else
+V_EXT_VSTART_CHECK;
+for (reg_t i = 0; i < std::max(P.VU.vlmax, P.VU.VLEN/P.VU.vsew); ++i) {
+  int mata_action = 0;
+#endif
+
   bool do_mask = P.VU.mask_elt(0, i);
 
   bool has_one = false;
@@ -21,6 +28,7 @@ for (reg_t i = 0; i < vl; ++i) {
     }
   }
 
+#ifndef CPU_NANHU
   // Bypass masked-off elements
   if ((insn.v_vm() == 0) && !do_mask)
     continue;
@@ -39,6 +47,46 @@ for (reg_t i = 0; i < vl; ++i) {
     P.VU.elt<uint64_t>(rd_num, i, true) = cnt;
     break;
   }
+#else
+  bool use_ori = (insn.v_vm() == 0) && !do_mask;
+  if (0 == P.VU.vta && i >= vl) { \
+    continue; \
+  } \
+  if ((1 == P.VU.vta && i >= vl) || (insn.v_vm() == 0 && 1 == P.VU.vma && !do_mask && i < vl)) \
+    mata_action = 2; \
+  else \
+    mata_action = 1; \
+  switch (sew) {
+  case e8:
+    if (1 == mata_action) {
+      P.VU.elt<uint8_t>(rd_num, i, true) = use_ori ?
+                                     P.VU.elt<uint8_t>(rd_num, i) : cnt;
+    } else \
+        P.VU.elt<uint8_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint8_t>(rd_num, i, false));
+    break;
+  case e16:
+    if (1 == mata_action) {
+      P.VU.elt<uint16_t>(rd_num, i, true) = use_ori ?
+                                      P.VU.elt<uint16_t>(rd_num, i) : cnt;
+    } else \
+        P.VU.elt<uint16_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint16_t>(rd_num, i, false));
+    break;
+  case e32:
+    if (1 == mata_action) {
+      P.VU.elt<uint32_t>(rd_num, i, true) = use_ori ?
+                                      P.VU.elt<uint32_t>(rd_num, i) : cnt;
+    } else \
+        P.VU.elt<uint32_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint32_t>(rd_num, i, false));
+    break;
+  default:
+    if (1 == mata_action) {
+      P.VU.elt<uint64_t>(rd_num, i, true) = use_ori ?
+                                      P.VU.elt<uint64_t>(rd_num, i) : cnt;
+    } else \
+      P.VU.elt<uint64_t>(rd_num, i, true) = vector_agnostic(P.VU.elt<uint64_t>(rd_num, i, false));
+    break;
+  }
+#endif
 
   if (has_one) {
     cnt++;

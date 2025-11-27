@@ -34,6 +34,13 @@ void mmu_t::flush_icache()
     icache[i].tag = -1;
 }
 
+void mmu_t::flush_icache_on_fence_i()
+{
+  sim->on_fence_i();
+  flush_icache();
+}
+
+
 void mmu_t::flush_tlb()
 {
   memset(tlb_insn, -1, sizeof(tlb_insn));
@@ -43,6 +50,19 @@ void mmu_t::flush_tlb()
 
   flush_icache();
 }
+
+void mmu_t::flush_tlb_on_sfence_vma()
+{
+  sim->on_sfence_vma();
+  flush_tlb();
+}
+
+void mmu_t::flush_tlb_on_satp_update(bool is_safe)
+{
+  sim->on_satp_update(is_safe);
+  flush_tlb();
+}
+
 
 void throw_access_exception(bool virt, reg_t addr, access_type type)
 {
@@ -234,8 +254,16 @@ void mmu_t::check_triggers(triggers::operation_t operation, reg_t address, bool 
 
 inline void mmu_t::perform_intrapage_load(reg_t vaddr, uintptr_t host_addr, reg_t paddr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags)
 {
+#ifdef CPU_NANHU
+  auto access_info = generate_access_info(vaddr, LOAD, xlate_flags);
+#endif
   if (host_addr) {
     memcpy(bytes, (char*)host_addr, len);
+#ifdef CPU_NANHU
+    sim->difftest_log_mem_load(paddr, (char*)host_addr, len);
+  } else if (access_info.flags.vldst) {
+    throw trap_load_access_fault(access_info.effective_virt, access_info.transformed_vaddr, 0, 0);
+#endif
   } else if (!mmio_load(paddr, len, bytes)) {
     auto access_info = generate_access_info(vaddr, LOAD, xlate_flags);
     if (access_info.flags.ss_access)
@@ -272,7 +300,11 @@ void mmu_t::load_slow_path_intrapage(reg_t len, uint8_t* bytes, mem_access_info_
   }
 }
 
+#ifdef CPU_NANHU
+void mmu_t::load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags, bool is_amo)
+#else
 void mmu_t::load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate_flags_t xlate_flags)
+#endif
 {
   if (likely(!xlate_flags.is_special_access())) {
     // Fast path for simple cases
@@ -295,8 +327,17 @@ void mmu_t::load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate
     load_slow_path_intrapage(len, bytes, access_info);
   } else {
     bool gva = access_info.effective_virt;
+#ifndef CPU_NANHU
     if (!is_misaligned_enabled())
       throw trap_load_address_misaligned(gva, transformed_addr, 0, 0);
+#else
+    if (!is_misaligned_enabled()){
+      if(is_amo == true)
+        throw trap_load_access_fault(gva, transformed_addr, 0, 0);
+      else
+        throw trap_load_address_misaligned(gva, transformed_addr, 0, 0);
+    }
+#endif
 
     if (access_info.flags.lr)
       throw trap_load_access_fault(gva, transformed_addr, 0, 0);
@@ -324,8 +365,16 @@ void mmu_t::load_slow_path(reg_t original_addr, reg_t len, uint8_t* bytes, xlate
 
 inline void mmu_t::perform_intrapage_store(reg_t vaddr, uintptr_t host_addr, reg_t paddr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags)
 {
+#ifdef CPU_NANHU
+  auto access_info = generate_access_info(vaddr, STORE, xlate_flags);
+#endif
   if (host_addr) {
      memcpy((char*)host_addr, bytes, len);
+#ifdef CPU_NANHU
+     sim->difftest_log_mem_store(paddr, (char*)host_addr, len);
+  }else if (access_info.flags.vldst)  {
+    throw trap_store_access_fault(access_info.effective_virt, access_info.transformed_vaddr, 0, 0);
+#endif
   } else if (!mmio_store(paddr, len, bytes)) {
     auto access_info = generate_access_info(vaddr, STORE, xlate_flags);
     throw trap_store_access_fault(access_info.effective_virt, access_info.transformed_vaddr, 0, 0);
@@ -359,7 +408,11 @@ void mmu_t::store_slow_path_intrapage(reg_t len, const uint8_t* bytes, mem_acces
     perform_intrapage_store(vaddr, host_addr, paddr, len, bytes, access_info.flags);
 }
 
+#ifdef CPU_NANHU
+void mmu_t::store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags, bool actually_store, bool UNUSED require_alignment, bool is_amo)
+#else
 void mmu_t::store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes, xlate_flags_t xlate_flags, bool actually_store, bool UNUSED require_alignment)
+#endif
 {
   if (likely(!xlate_flags.is_special_access())) {
     // Fast path for simple cases
@@ -376,6 +429,9 @@ void mmu_t::store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes
 
   auto access_info = generate_access_info(original_addr, STORE, xlate_flags);
   reg_t transformed_addr = access_info.transformed_vaddr;
+#ifdef CPU_NANHU
+  check_triggers(triggers::OPERATION_STORE, transformed_addr, access_info.effective_virt);
+#endif
 
   if (actually_store && check_triggers_store) {
     reg_t trig_len = len;
@@ -390,8 +446,19 @@ void mmu_t::store_slow_path(reg_t original_addr, reg_t len, const uint8_t* bytes
 
   if (transformed_addr & (len - 1)) {
     bool gva = access_info.effective_virt;
+#ifndef CPU_NANHU
     if (!is_misaligned_enabled())
       throw trap_store_address_misaligned(gva, transformed_addr, 0, 0);
+#else
+    if (!is_misaligned_enabled()){
+      if(is_amo == true){
+        sim->sc_failed = false;
+        throw trap_store_access_fault(gva, transformed_addr, 0, 0);
+      }
+      else
+        throw trap_store_address_misaligned(gva, transformed_addr, 0, 0);
+    }
+#endif
 
     if (require_alignment)
       throw trap_store_access_fault(gva, transformed_addr, 0, 0);
@@ -674,6 +741,10 @@ reg_t mmu_t::walk(mem_access_info_t access_info)
   if (vm.levels == 0)
     return s2xlate(addr, addr & ((reg_t(2) << (proc->xlen-1))-1), type, type, virt, hlvx, false) & ~page_mask; // zero-extend from xlen
 
+#ifdef CPU_NANHU
+  sim->has_touched_vm = true;
+#endif
+
   if (proc->extension_enabled(EXT_SVUKTE) && !check_svukte_qualified(addr, mode, access_info.flags.forced_virt)) {
     throw_page_fault_exception(virt, addr, type);
   }
@@ -697,6 +768,9 @@ reg_t mmu_t::walk(mem_access_info_t access_info)
     // check that physical address of PTE is legal
     auto pte_paddr = s2xlate(addr, base + idx * vm.ptesize, LOAD, type, virt, false, true);
     reg_t pte = pte_load(pte_paddr, addr, virt, type, vm.ptesize);
+#ifdef CPU_NANHU
+    sim->difftest_log("ptw: level %d, vaddr 0x%lx, pg_base 0x%lx, p_pte 0x%lx, pte.val 0x%lx", i, addr, base, pte_paddr, pte);
+#endif
     reg_t ppn = (pte & ~reg_t(PTE_ATTR)) >> PTE_PPN_SHIFT;
     bool pbmte = virt ? (proc->get_state()->henvcfg->read() & HENVCFG_PBMTE) : (proc->get_state()->menvcfg->read() & MENVCFG_PBMTE);
     bool hade = virt ? (proc->get_state()->henvcfg->read() & HENVCFG_ADUE) : (proc->get_state()->menvcfg->read() & MENVCFG_ADUE);

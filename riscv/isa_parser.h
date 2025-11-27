@@ -36,6 +36,9 @@ typedef enum {
   EXT_ZVFH,
   EXT_ZVFBFA,
   EXT_ZVFHMIN,
+#ifdef CPU_NANHU
+  EXT_SDTRIG,
+#endif
   EXT_ZVFOFP4MIN,
   EXT_ZVFOFP8MIN,
   EXT_SMEPMP,

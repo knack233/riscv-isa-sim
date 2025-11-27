@@ -65,7 +65,11 @@ public:
   // Callback for processors to let the simulation know they were reset.
   virtual void proc_reset(unsigned id) override;
 
+#if defined(SPIKE_FUZZ) || defined(DIFFTEST)
+  static const size_t INTERLEAVE = -1ULL; // disable the timer
+#else
   static const size_t INTERLEAVE = 5000;
+#endif
   static const size_t INSNS_PER_RTC_TICK = 100; // 10 MHz clock for 1 BIPS core
   static const size_t CPU_HZ = 1000000000; // 1GHz CPU
 
@@ -93,6 +97,9 @@ private:
   std::ostream sout_; // used for socket and terminal interface
 
   processor_t* get_core(const std::string& i);
+#if defined(SPIKE_FUZZ) || defined(DIFFTEST)
+  public:
+#endif
   void step(size_t n); // step through simulation
   size_t current_step;
   size_t current_proc;
@@ -106,9 +113,16 @@ private:
   // host pointer corresponding to paddr.
   // For these purposes, only memories that include the entire base page
   // surrounding paddr are considered; smaller memories are treated as I/O.
+#if defined(DIFFTEST)
+  public:
+  virtual bool set_mmio(reg_t paddr, size_t len, const uint8_t* bytes);
+#endif
   virtual char* addr_to_mem(reg_t paddr) override;
 
   // memory-mapped I/O routines
+#if defined(DIFFTEST)
+  private:
+#endif
   virtual bool mmio_load(reg_t paddr, size_t len, uint8_t* bytes) override;
   virtual bool mmio_store(reg_t paddr, size_t len, const uint8_t* bytes) override;
   void set_rom();
